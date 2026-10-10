@@ -15,7 +15,7 @@ go run ./cmd/server
 ## 在 CentOS 7 云主机上部署
 
 ```bash
-git clone <仓库地址>
+git clone https://github.com/ZJU2022/qiutu.git
 cd qiutu
 sudo bash deploy.sh
 ```
