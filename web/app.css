@@ -1,0 +1,83 @@
+body {
+  margin: 0;
+  background: #fff;
+  color: #1a1a1a;
+  font: 15px/1.55 "PingFang SC", "Noto Sans SC", sans-serif;
+}
+
+.wrap {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 28px 20px 80px;
+}
+
+h1 { font-size: 28px; margin: 0 0 8px; }
+h2 { font-size: 18px; margin: 32px 0 8px; }
+h3 { font-size: 16px; margin: 0; }
+
+p, li { margin: 4px 0; }
+
+.rules {
+  margin: 16px 0 8px;
+  padding: 12px 16px;
+  background: #f6f6f6;
+}
+
+.rules strong { margin-right: 6px; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 4px;
+}
+
+th, td {
+  border: 1px solid #ccc;
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th { background: #f3f3f3; font-weight: 600; }
+
+tr.current { background: #fff6cc; }
+tr.done td:nth-child(5) { color: #1d6b32; }
+tr.locked { color: #777; }
+tr.future { color: #888; }
+
+.purpose { color: #444; margin: 0 0 4px; }
+
+.box {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid #ccc;
+}
+
+.box.warn { background: #fff1f0; border-color: #e7b2ae; }
+.box.ok { background: #f2faf3; border-color: #b7d7b9; }
+
+button, input, select, textarea { font: inherit; }
+button { padding: 4px 10px; cursor: pointer; }
+input, select, textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 6px;
+}
+textarea { min-height: 72px; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  gap: 8px 12px;
+  align-items: end;
+}
+
+label { display: block; font-size: 13px; color: #555; }
+
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
+a { color: #0b57d0; }
+
+.small { color: #555; font-size: 13px; }
+
+.table-wrap { overflow-x: auto; }
