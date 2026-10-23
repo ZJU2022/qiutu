@@ -39,10 +39,12 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /api/upgrade/check", a.check)
 	mux.HandleFunc("POST /api/upgrade/confirm", a.confirm)
 	mux.HandleFunc("POST /api/rollback", a.rollback)
+	mux.HandleFunc("POST /api/users/{id}/level", a.setLevel)
 	mux.HandleFunc("GET /api/stats", a.stats)
 
 	mux.HandleFunc("GET /api/admin/modules", a.adminOnly(a.adminModules))
 	mux.HandleFunc("GET /api/admin/actions", a.adminOnly(a.adminActions))
+	mux.HandleFunc("PUT /api/actions/{id}", a.adminUpdateAction)
 	mux.HandleFunc("PUT /api/admin/actions/{id}", a.adminOnly(a.adminUpdateAction))
 	mux.HandleFunc("GET /api/admin/users", a.adminOnly(a.adminUsers))
 	mux.HandleFunc("GET /api/admin/users/{id}/progress", a.adminOnly(a.adminProgress))
@@ -259,6 +261,26 @@ func (a *API) rollback(w http.ResponseWriter, r *http.Request) {
 		body.UserID = 1
 	}
 	progress, err := a.Store.Rollback(body.UserID, body.ModuleID, body.Reason, body.SessionID)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, progress)
+}
+
+func (a *API) setLevel(w http.ResponseWriter, r *http.Request) {
+	userID, ok := pathID(w, r, "id")
+	if !ok {
+		return
+	}
+	var body struct {
+		ModuleID int `json:"module_id"`
+		Level    int `json:"level"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	progress, err := a.Store.SetLevel(userID, body.ModuleID, body.Level)
 	if err != nil {
 		writeStoreErr(w, err)
 		return

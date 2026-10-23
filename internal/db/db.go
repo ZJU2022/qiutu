@@ -1,4 +1,4 @@
-// Package db 负责打开数据库、建表，以及第一次运行时灌入 90 个动作。
+// Package db 负责打开数据库、建表，以及灌入康复师给出的动作方案。
 // 数据库可以想成一个会保存的笔记本：程序关掉，本子还在。
 package db
 
@@ -144,6 +144,33 @@ CREATE INDEX IF NOT EXISTS idx_sets_session ON workout_set_logs(session_id, set_
 `)
 	if err != nil {
 		return fmt.Errorf("建表失败: %w", err)
+	}
+	if err := ensureColumn(database, "actions", "class_note", "TEXT"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ensureColumn 给已经存在的表补一列。SQLite 没有「有了就跳过」的写法，所以先看表结构。
+func ensureColumn(database *sql.DB, table, column, decl string) error {
+	rows, err := database.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return fmt.Errorf("查看表结构失败: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if _, err := database.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + decl); err != nil {
+		return fmt.Errorf("增加 %s 失败: %w", column, err)
 	}
 	return nil
 }

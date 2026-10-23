@@ -14,7 +14,8 @@ const state = {
   symptom: { body_part: "腰", symptom_type: "腿麻", severity: 3, note: "" },
   adminModuleId: 1,
   adminActions: [],
-  adminOpen: false,
+  muscle: "",
+  editingId: 0,
 };
 
 function esc(value) {
@@ -56,9 +57,6 @@ async function load() {
   details.forEach((detail) => {
     state.ladders[detail.module.id] = detail;
   });
-  const history = await api("/api/users/1/history");
-  state.history = history.sessions || [];
-  if (state.adminOpen) await loadAdmin();
 }
 
 async function loadAdmin() {
@@ -75,27 +73,24 @@ function render() {
   }
   app.innerHTML = [
     renderHead(),
+    renderAnatomy(state.muscle),
     state.error ? `<div class="box warn">${esc(state.error)}</div>` : "",
     state.notice ? `<div class="box ok">${esc(state.notice)}</div>` : "",
     state.warning ? `<div class="box warn"><b>请先停下来。</b> ${esc(state.warning)}</div>` : "",
     renderSuggest(),
     renderModules(),
-    renderRecorder(),
-    renderHistory(),
-    renderSymptom(),
-    renderAdmin(),
   ].join("");
 }
 
 function renderHead() {
   return `<h1>康复自重训练方案</h1>
-    <p>这页用来向康复师说明训练思路：9 个模块，每个 10 级，不负重，酒店或公园都能做。</p>
+    <p>这一页按康复师写的进退阶排列。动作下面的要点按初始方案来写。课上纠正是第十五到十七课单独的一列。每天从里面选 3 到 5 个。黄色那一行是你标的当前级。</p>
     <div class="rules">
-      <div><strong>升级</strong>当前等级做满目标组数，动作标准，没有危险症状。确认后才升一级。</div>
-      <div><strong>停止</strong>疼痛达到 3 分，或出现腰疼、腿麻、电流感、刺痛，立刻停止。</div>
-      <div><strong>回退</strong>同一次训练出现上述症状，或连续两次不舒服，退回上一级。</div>
-      <div><strong>锁定</strong>单臂、倒立撑后半段、跑步默认锁定，康复师确认后才解锁。</div>
-      <div><strong>份量</strong>一天建议最多 3 个模块。名字里写了次数或时间的，按名字；没写的力量动作先按 3 组 × 8 次，可以改。</div>
+      <div><strong>现在的判断</strong>核心很有力，但还不知道怎么用，控制不够。动作保持简单、直接：该收紧的地方收紧，不要再加别的小动作。</div>
+      <div><strong>停止</strong>疼痛达到 3 分，或出现腰疼、腿麻、电流感、刺痛，立刻停止。骨盆像一盆水，不能洒。</div>
+      <div><strong>呼吸</strong>大多数动作呼气发力、吸气还原。臀桥按课上的说法：吸气向上，吐气向下。</div>
+      <div><strong>当前级</strong>每个项目旁边可以自己选「我现在在第几级」，选好后点设成这一级。黄色行会跟着变。</div>
+      <div><strong>修改</strong>每个动作后面的「编辑」可以改名字、要点、课上纠正、组数、次数和秒数。改完点保存。</div>
     </div>`;
 }
 
@@ -103,32 +98,76 @@ function renderSuggest() {
   const home = state.home;
   if (home.rest_today) return `<p><b>今天：</b>${esc(home.rest_message)}</p>`;
   const items = (home.suggestions || []).map((item) =>
-    `<a href="#m-${item.module_id}">${esc(item.module_name)} Lv${item.level} ${esc(item.action_name)}</a>`,
+    `<a href="#m-${item.module_id}">${esc(item.module_name)} 第${item.level}级 ${esc(item.action_name)}</a>`,
   );
-  const active = home.active
-    ? ` <button data-act="resume" data-id="${home.active.id}">继续未写完的记录</button>`
-    : "";
-  return `<p><b>今天建议先看：</b>${items.join("；") || "今天先休息。"}${active}</p>`;
+  return `<p><b>今天建议先看：</b>${items.join("；") || "今天先休息。"}</p>`;
+}
+
+function findAction(id) {
+  for (const detail of Object.values(state.ladders)) {
+    const found = (detail.actions || []).find((item) => item.id === id);
+    if (found) return found;
+  }
+  return null;
+}
+
+function renderActionRow(action) {
+  if (state.editingId === action.id) {
+    return `<tr class="${esc(action.state)}">
+      <td>${action.level}</td>
+      <td class="edit-fields">
+        <label>动作名称</label>
+        <input data-edit="name" data-id="${action.id}" value="${esc(action.name)}" />
+        <label>要点</label>
+        <textarea data-edit="points" data-id="${action.id}">${esc(action.points)}</textarea>
+      </td>
+      <td class="edit-fields">
+        <label>课上纠正</label>
+        <textarea data-edit="class_note" data-id="${action.id}">${esc(action.class_note || "")}</textarea>
+      </td>
+      <td class="edit-fields">
+        <label>组数</label>
+        <input data-edit="target_sets" data-id="${action.id}" type="number" min="1" value="${action.target_sets}" />
+        <label>次数，不限制就空着</label>
+        <input data-edit="target_reps" data-id="${action.id}" type="number" min="1" value="${action.target_reps ?? ""}" />
+        <label>秒数，不限制就空着</label>
+        <input data-edit="target_seconds" data-id="${action.id}" type="number" min="1" value="${action.target_seconds ?? ""}" />
+        <div class="actions">
+          <button type="button" data-act="save-edit" data-id="${action.id}">保存</button>
+          <button type="button" data-act="cancel-edit">取消</button>
+        </div>
+      </td>
+    </tr>`;
+  }
+  return `<tr class="${esc(action.state)}">
+    <td>${action.level}</td>
+    <td>
+      <div class="name-line"><span>${esc(action.name)}</span><button type="button" data-act="edit" data-id="${action.id}">编辑</button></div>
+      <div class="field-label">要点</div>
+      <div class="points">${esc(action.points)}</div>
+    </td>
+    <td class="class-note">${esc(action.class_note || "—")}</td>
+    <td>${esc(targetText(action))}</td>
+  </tr>`;
 }
 
 function renderModules() {
   return state.home.modules.map((card) => {
     const detail = state.ladders[card.id];
-    const rows = (detail ? detail.actions : []).map((action) => {
-      const canRecord = action.state === "current";
-      return `<tr class="${esc(action.state)}">
-        <td>${action.level}</td>
-        <td>${esc(action.name)}</td>
-        <td>${esc(targetText(action))}</td>
-        <td>${esc(action.frequency)}</td>
-        <td>${statusText(action)}</td>
-        <td>${canRecord ? `<button data-act="start" data-module="${card.id}" data-action="${action.id}">记一次</button>` : ""}</td>
-      </tr>`;
-    }).join("");
+    const actions = detail ? detail.actions : [];
+    const rows = actions.map((action) => renderActionRow(action)).join("");
+    const options = actions.map((action) =>
+      `<option value="${action.level}" ${action.level === card.current_level ? "selected" : ""}>第 ${action.level} 级 ${esc(action.name)}</option>`,
+    ).join("");
     return `<h2 id="m-${card.id}">${card.sort_order}. ${esc(card.name)}</h2>
-      <p class="purpose">${esc(card.purpose)}　当前 Lv${card.current_level}，已通过 ${card.cleared_levels}/10，状态 ${esc(card.status)}。</p>
+      <p class="purpose">${esc(card.purpose)}</p>
+      <div class="level-pick">
+        <label for="level-${card.id}">我现在在</label>
+        <select id="level-${card.id}">${options}</select>
+        <button type="button" data-act="set-level" data-module="${card.id}">设成这一级</button>
+      </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>级</th><th>动作</th><th>目标</th><th>频率</th><th>状态</th><th></th></tr></thead>
+        <thead><tr><th>级</th><th>动作</th><th>课上纠正</th><th>目标</th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>`;
   }).join("");
@@ -253,34 +292,52 @@ function readWorkoutForm() {
 }
 
 app.addEventListener("click", async (event) => {
+  const muscle = event.target.closest("[data-muscle]");
+  if (muscle) {
+    state.muscle = muscle.getAttribute("data-muscle");
+    const y = window.scrollY;
+    render();
+    window.scrollTo(0, y);
+    return;
+  }
   const button = event.target.closest("[data-act]");
   if (!button) return;
   state.error = "";
   try {
     const act = button.dataset.act;
-    if (act === "start") await startWorkout(Number(button.dataset.module), Number(button.dataset.action));
-    if (act === "resume") await resumeWorkout(Number(button.dataset.id));
-    if (act === "save-set") await saveSet();
-    if (act === "finish") await finishWorkout();
-    if (act === "upgrade") await confirmUpgrade();
-    if (act === "rollback") await rollback(Number(button.dataset.module), Number(button.dataset.session) || 0);
-    if (act === "save-symptom") await saveSymptom();
-    if (act === "open-admin") {
-      state.adminOpen = true;
-      await loadAdmin();
+    if (act === "set-level") await setLevel(Number(button.dataset.module));
+    if (act === "edit") {
+      state.editingId = Number(button.dataset.id);
+      const y = window.scrollY;
       render();
+      window.scrollTo(0, y);
     }
-    if (act === "admin-module") {
-      state.adminModuleId = Number(button.dataset.id);
-      await loadAdmin();
+    if (act === "cancel-edit") {
+      state.editingId = 0;
+      const y = window.scrollY;
       render();
+      window.scrollTo(0, y);
     }
-    if (act === "save-action") await saveAction(Number(button.dataset.id));
+    if (act === "save-edit") await saveEdit(Number(button.dataset.id));
   } catch (error) {
     state.error = error.message;
     render();
   }
 });
+
+async function setLevel(moduleId) {
+  const select = document.getElementById("level-" + moduleId);
+  const level = Number(select && select.value);
+  await api("/api/users/1/level", {
+    method: "POST",
+    body: JSON.stringify({ module_id: moduleId, level }),
+  });
+  state.notice = "已把这一项设到第 " + level + " 级。";
+  const y = window.scrollY;
+  await load();
+  render();
+  window.scrollTo(0, y);
+}
 
 async function startWorkout(moduleId, actionId) {
   const session = await api("/api/workout/sessions", {
@@ -397,42 +454,31 @@ async function rollback(moduleId, sessionId) {
   render();
 }
 
-async function saveSymptom() {
-  const body = {
-    user_id: 1,
-    body_part: document.getElementById("sym-part").value,
-    symptom_type: document.getElementById("sym-type").value,
-    severity: Number(document.getElementById("sym-severity").value),
-    note: document.getElementById("sym-note").value,
-  };
-  state.symptom = body;
-  await api("/api/symptoms", { method: "POST", body: JSON.stringify(body) });
-  state.notice = "症状已记下。";
-  render();
-}
-
-async function saveAction(id) {
-  const current = state.adminActions.find((item) => item.id === id);
+async function saveEdit(id) {
+  const current = findAction(id);
+  if (!current) throw new Error("找不到这个动作");
   const read = (field) => document.querySelector(`[data-edit="${field}"][data-id="${id}"]`);
-  const reps = read("target_reps").value;
-  const seconds = read("target_seconds").value;
+  const reps = read("target_reps").value.trim();
+  const seconds = read("target_seconds").value.trim();
   const body = {
     ...current,
-    name: read("name").value,
+    name: read("name").value.trim(),
+    points: read("points").value,
+    class_note: read("class_note").value,
     target_sets: Number(read("target_sets").value),
     target_reps: reps === "" ? null : Number(reps),
     target_seconds: seconds === "" ? null : Number(seconds),
-    frequency: read("frequency").value,
-    is_locked: read("is_locked").checked,
   };
-  await api("/api/admin/actions/" + id, {
+  await api("/api/actions/" + id, {
     method: "PUT",
-    headers: { "X-Demo-Role": "admin" },
     body: JSON.stringify(body),
   });
-  state.notice = "Lv" + current.level + " 已保存。";
+  state.editingId = 0;
+  state.notice = "第 " + current.level + " 级已保存。";
+  const y = window.scrollY;
   await load();
   render();
+  window.scrollTo(0, y);
 }
 
 load().then(render).catch((error) => {

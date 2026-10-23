@@ -93,7 +93,7 @@ func (s *Store) Home(userID int) (model.Home, error) {
 	}
 	if activity.todayCount >= logic.DailyModuleLimit {
 		home.RestToday = true
-		home.RestMessage = "今天已经练了 3 个模块，建议休息，避免过度训练。"
+		home.RestMessage = fmt.Sprintf("今天已经练了 %d 个小训练。康复师的安排是每天 3 到 5 个，今天先到这里。", logic.DailyModuleLimit)
 		return home, nil
 	}
 	for _, card := range cards {
@@ -135,7 +135,7 @@ func (s *Store) ModuleDetail(userID, moduleID int) (model.ModuleDetail, error) {
 	if !found {
 		return model.ModuleDetail{}, userErr(ErrNotFound, "找不到这个模块")
 	}
-	rows, err := s.DB.Query(`SELECT id, module_id, level, name, target_sets, target_reps, target_seconds, target_side, frequency, points, contraindications, COALESCE(video_url,''), is_locked FROM actions WHERE module_id=? ORDER BY level`, moduleID)
+	rows, err := s.DB.Query(`SELECT id, module_id, level, name, target_sets, target_reps, target_seconds, target_side, frequency, points, COALESCE(class_note,''), contraindications, COALESCE(video_url,''), is_locked FROM actions WHERE module_id=? ORDER BY level`, moduleID)
 	if err != nil {
 		return model.ModuleDetail{}, err
 	}
@@ -147,7 +147,7 @@ func (s *Store) ModuleDetail(userID, moduleID int) (model.ModuleDetail, error) {
 			return model.ModuleDetail{}, err
 		}
 		rawStatus := "进行中"
-		if card.ClearedLevels >= 10 {
+		if card.Completed {
 			rawStatus = "已完成"
 		}
 		action.State = actionState(action.Level, card.CurrentLevel, rawStatus, card.IsLocked, action.IsLocked)
@@ -246,7 +246,7 @@ func (s *Store) CreateSession(userID, moduleID, actionID int) (model.Session, er
 		return model.Session{}, err
 	}
 	if otherToday >= logic.DailyModuleLimit {
-		return model.Session{}, userErr(ErrBadInput, "今天已经训练了 3 个模块，建议休息，避免过度训练")
+		return model.Session{}, userErr(ErrBadInput, fmt.Sprintf("今天已经训练了 %d 个小训练，按康复师的安排先停", logic.DailyModuleLimit))
 	}
 
 	res, err := tx.Exec(`INSERT INTO workout_sessions(user_id, module_id, action_id, date, status, total_sets, symptom_flag, note, created_at) VALUES (?, ?, ?, ?, '进行中', 0, 0, '', ?)`, userID, moduleID, actionID, today(), now())
@@ -406,7 +406,11 @@ func (s *Store) ConfirmUpgrade(sessionID int) (model.Progress, error) {
 	to := progress.CurrentLevel
 	newStatus := "已完成"
 	reason := "完成该模块最高级"
-	if progress.CurrentLevel < 10 {
+	top, err := s.topLevel(tx, session.ModuleID)
+	if err != nil {
+		return model.Progress{}, err
+	}
+	if progress.CurrentLevel < top {
 		to = progress.CurrentLevel + 1
 		newStatus = "进行中"
 		reason = fmt.Sprintf("达到升级标准：达标 %d 组", view.GoodSets)
@@ -461,6 +465,50 @@ func (s *Store) Rollback(userID, moduleID int, reason string, sessionID int) (mo
 	}
 	if _, err := tx.Exec(`INSERT INTO upgrade_logs(user_id, module_id, action_id, from_level, to_level, type, reason, source_session_id, created_at) VALUES (?, ?, ?, ?, ?, '回退', ?, ?, ?)`, userID, moduleID, actionID, progress.CurrentLevel, to, reason, src, now()); err != nil {
 		return model.Progress{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return model.Progress{}, err
+	}
+	return s.progressOf(s.DB, userID, moduleID)
+}
+
+// SetLevel 让训练者自己标明「我现在在做这一级」。
+func (s *Store) SetLevel(userID, moduleID, level int) (model.Progress, error) {
+	if level < 1 {
+		return model.Progress{}, userErr(ErrBadInput, "等级要从 1 开始")
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return model.Progress{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	progress, err := s.progressOf(tx, userID, moduleID)
+	if err != nil {
+		return model.Progress{}, err
+	}
+	top, err := s.topLevel(tx, moduleID)
+	if err != nil {
+		return model.Progress{}, err
+	}
+	if level > top {
+		return model.Progress{}, userErr(ErrBadInput, fmt.Sprintf("这个项目只有 %d 级", top))
+	}
+	var actionID int
+	if err := tx.QueryRow(`SELECT id FROM actions WHERE module_id=? AND level=?`, moduleID, level).Scan(&actionID); err != nil {
+		return model.Progress{}, err
+	}
+	maxLevel := progress.MaxLevel
+	if level > maxLevel {
+		maxLevel = level
+	}
+	if _, err := tx.Exec(`UPDATE user_module_progress SET current_level=?, max_level=?, status='进行中', updated_at=? WHERE user_id=? AND module_id=?`, level, maxLevel, now(), userID, moduleID); err != nil {
+		return model.Progress{}, err
+	}
+	if progress.CurrentLevel != level {
+		if _, err := tx.Exec(`INSERT INTO upgrade_logs(user_id, module_id, action_id, from_level, to_level, type, reason, created_at) VALUES (?, ?, ?, ?, ?, '自设', '自己设定当前等级', ?)`, userID, moduleID, actionID, progress.CurrentLevel, level, now()); err != nil {
+			return model.Progress{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return model.Progress{}, err
@@ -618,10 +666,11 @@ func (s *Store) UpdateAction(action model.Action) error {
 		return userErr(ErrBadInput, "频率不在可选范围内")
 	}
 	action.Points = trimRunes(action.Points, 2000)
+	action.ClassNote = trimRunes(action.ClassNote, 2000)
 	action.Contraindications = trimRunes(action.Contraindications, 2000)
 	action.VideoURL = trimRunes(strings.TrimSpace(action.VideoURL), 500)
-	res, err := s.DB.Exec(`UPDATE actions SET name=?, target_sets=?, target_reps=?, target_seconds=?, target_side=?, frequency=?, points=?, contraindications=?, video_url=?, is_locked=? WHERE id=?`,
-		action.Name, action.TargetSets, nullInt(action.TargetReps), nullInt(action.TargetSeconds), action.TargetSide, action.Frequency, action.Points, action.Contraindications, action.VideoURL, boolInt(action.IsLocked), action.ID)
+	res, err := s.DB.Exec(`UPDATE actions SET name=?, target_sets=?, target_reps=?, target_seconds=?, target_side=?, frequency=?, points=?, class_note=?, contraindications=?, video_url=?, is_locked=? WHERE id=?`,
+		action.Name, action.TargetSets, nullInt(action.TargetReps), nullInt(action.TargetSeconds), action.TargetSide, action.Frequency, action.Points, action.ClassNote, action.Contraindications, action.VideoURL, boolInt(action.IsLocked), action.ID)
 	if err != nil {
 		return err
 	}
@@ -708,7 +757,7 @@ func (s *Store) Lock(userID, moduleID, level int, locked bool, reason string) er
 }
 
 func (s *Store) ActionsOf(moduleID int) ([]model.Action, error) {
-	rows, err := s.DB.Query(`SELECT id, module_id, level, name, target_sets, target_reps, target_seconds, target_side, frequency, points, contraindications, COALESCE(video_url,''), is_locked FROM actions WHERE module_id=? ORDER BY level`, moduleID)
+	rows, err := s.DB.Query(`SELECT id, module_id, level, name, target_sets, target_reps, target_seconds, target_side, frequency, points, COALESCE(class_note,''), contraindications, COALESCE(video_url,''), is_locked FROM actions WHERE module_id=? ORDER BY level`, moduleID)
 	if err != nil {
 		return nil, err
 	}
@@ -767,7 +816,8 @@ func (s *Store) moduleCards(userID int) ([]model.ModuleCard, activityInfo, error
 	todayRows.Close()
 	info.todayCount = len(info.trainedToday)
 
-	cardRows, err := s.DB.Query(`SELECT m.id, m.name, m.purpose, m.sort_order, m.is_locked, p.current_level, p.max_level, p.status, a.id, a.name, a.is_locked, a.frequency
+	cardRows, err := s.DB.Query(`SELECT m.id, m.name, m.purpose, m.sort_order, m.is_locked, p.current_level, p.max_level, p.status, a.id, a.name, a.is_locked, a.frequency,
+		(SELECT COUNT(*) FROM actions c WHERE c.module_id=m.id)
 		FROM modules m
 		JOIN user_module_progress p ON p.module_id=m.id AND p.user_id=?
 		JOIN actions a ON a.module_id=m.id AND a.level=p.current_level
@@ -780,18 +830,19 @@ func (s *Store) moduleCards(userID int) ([]model.ModuleCard, activityInfo, error
 	for cardRows.Next() {
 		var card model.ModuleCard
 		var moduleLocked, actionLocked int
-		if err := cardRows.Scan(&card.ID, &card.Name, &card.Purpose, &card.SortOrder, &moduleLocked, &card.CurrentLevel, &card.MaxLevel, &card.Status, &card.CurrentActionID, &card.CurrentActionName, &actionLocked, &card.Frequency); err != nil {
+		if err := cardRows.Scan(&card.ID, &card.Name, &card.Purpose, &card.SortOrder, &moduleLocked, &card.CurrentLevel, &card.MaxLevel, &card.Status, &card.CurrentActionID, &card.CurrentActionName, &actionLocked, &card.Frequency, &card.TotalLevels); err != nil {
 			return nil, info, err
 		}
 		card.IsLocked = moduleLocked == 1
 		card.CurrentActionLocked = actionLocked == 1
 		rawStatus := card.Status
+		card.Completed = rawStatus == "已完成"
 		if card.IsLocked || (card.CurrentActionLocked && rawStatus != "已完成") {
 			card.Status = "已锁定"
 		}
 		card.ClearedLevels = card.CurrentLevel - 1
-		if rawStatus == "已完成" {
-			card.ClearedLevels = 10
+		if card.Completed {
+			card.ClearedLevels = card.TotalLevels
 		}
 		if card.ClearedLevels < 0 {
 			card.ClearedLevels = 0
@@ -842,9 +893,9 @@ func (s *Store) evaluate(q queryer, sessionID int) (model.FinishResult, error) {
 
 func (s *Store) upgradeView(q queryer, sessionID int) (model.UpgradeView, error) {
 	var reps, secs sql.NullInt64
-	var sets, level int
+	var moduleID, sets, level int
 	var side string
-	err := q.QueryRow(`SELECT a.target_sets, a.target_reps, a.target_seconds, a.target_side, a.level FROM workout_sessions s JOIN actions a ON a.id=s.action_id WHERE s.id=?`, sessionID).Scan(&sets, &reps, &secs, &side, &level)
+	err := q.QueryRow(`SELECT a.module_id, a.target_sets, a.target_reps, a.target_seconds, a.target_side, a.level FROM workout_sessions s JOIN actions a ON a.id=s.action_id WHERE s.id=?`, sessionID).Scan(&moduleID, &sets, &reps, &secs, &side, &level)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.UpgradeView{}, userErr(ErrNotFound, "找不到这次训练")
 	}
@@ -867,13 +918,17 @@ func (s *Store) upgradeView(q queryer, sessionID int) (model.UpgradeView, error)
 		target.Seconds = int(secs.Int64)
 	}
 	decision := logic.JudgeUpgrade(records, target)
+	top, err := s.topLevel(q, moduleID)
+	if err != nil {
+		return model.UpgradeView{}, err
+	}
 	view := model.UpgradeView{Eligible: decision.Eligible, GoodSets: decision.GoodSets, NeedSets: decision.NeedSets, Reasons: decision.Reasons, NextLevel: level}
-	if decision.Eligible && level < 10 {
+	if decision.Eligible && level < top {
 		view.NextLevel = level + 1
 	}
-	if decision.Eligible && level >= 10 {
+	if decision.Eligible && level >= top {
 		view.ModuleDone = true
-		view.NextLevel = 10
+		view.NextLevel = level
 	}
 	if view.Reasons == nil {
 		view.Reasons = []string{}
@@ -953,10 +1008,10 @@ func (s *Store) actionWithModule(q queryer, id int) (model.Action, error) {
 	var action model.Action
 	var reps, secs sql.NullInt64
 	var locked int
-	var points, contra, video sql.NullString
-	err := q.QueryRow(`SELECT a.id, a.module_id, a.level, a.name, a.target_sets, a.target_reps, a.target_seconds, a.target_side, a.frequency, a.points, a.contraindications, COALESCE(a.video_url,''), a.is_locked, m.name, m.purpose
+	var points, classNote, contra, video sql.NullString
+	err := q.QueryRow(`SELECT a.id, a.module_id, a.level, a.name, a.target_sets, a.target_reps, a.target_seconds, a.target_side, a.frequency, a.points, COALESCE(a.class_note,''), a.contraindications, COALESCE(a.video_url,''), a.is_locked, m.name, m.purpose
 		FROM actions a JOIN modules m ON m.id=a.module_id WHERE a.id=?`, id).Scan(
-		&action.ID, &action.ModuleID, &action.Level, &action.Name, &action.TargetSets, &reps, &secs, &action.TargetSide, &action.Frequency, &points, &contra, &video, &locked, &action.ModuleName, &action.Purpose)
+		&action.ID, &action.ModuleID, &action.Level, &action.Name, &action.TargetSets, &reps, &secs, &action.TargetSide, &action.Frequency, &points, &classNote, &contra, &video, &locked, &action.ModuleName, &action.Purpose)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Action{}, userErr(ErrNotFound, "找不到这个动作")
 	}
@@ -966,6 +1021,7 @@ func (s *Store) actionWithModule(q queryer, id int) (model.Action, error) {
 	action.TargetReps = intPtr(reps)
 	action.TargetSeconds = intPtr(secs)
 	action.Points = points.String
+	action.ClassNote = classNote.String
 	action.Contraindications = contra.String
 	action.VideoURL = video.String
 	action.IsLocked = locked == 1
@@ -1026,14 +1082,15 @@ func scanAction(row scanner) (model.Action, error) {
 	var action model.Action
 	var reps, secs sql.NullInt64
 	var locked int
-	var points, contra, video sql.NullString
-	err := row.Scan(&action.ID, &action.ModuleID, &action.Level, &action.Name, &action.TargetSets, &reps, &secs, &action.TargetSide, &action.Frequency, &points, &contra, &video, &locked)
+	var points, classNote, contra, video sql.NullString
+	err := row.Scan(&action.ID, &action.ModuleID, &action.Level, &action.Name, &action.TargetSets, &reps, &secs, &action.TargetSide, &action.Frequency, &points, &classNote, &contra, &video, &locked)
 	if err != nil {
 		return model.Action{}, err
 	}
 	action.TargetReps = intPtr(reps)
 	action.TargetSeconds = intPtr(secs)
 	action.Points = points.String
+	action.ClassNote = classNote.String
 	action.Contraindications = contra.String
 	action.VideoURL = video.String
 	action.IsLocked = locked == 1
@@ -1107,6 +1164,15 @@ func boolInt(v bool) int {
 		return 1
 	}
 	return 0
+}
+
+func (s *Store) topLevel(q queryer, moduleID int) (int, error) {
+	var n int
+	err := q.QueryRow(`SELECT COALESCE(MAX(level), 1) FROM actions WHERE module_id=?`, moduleID).Scan(&n)
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func today() string { return time.Now().Format("2006-01-02") }

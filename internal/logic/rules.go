@@ -10,8 +10,8 @@ import (
 // PainStopThreshold 疼痛达到这个分数就要停。0 是完全不痛，10 是极痛。
 const PainStopThreshold = 3
 
-// DailyModuleLimit 一天最多认真练几个模块，用来防止练过头。
-const DailyModuleLimit = 3
+// DailyModuleLimit 一天最多练几个小训练。康复师的安排是每天选 3 到 5 个，这里卡住上限。
+const DailyModuleLimit = 5
 
 // dangerSymptoms 是必须马上停止的症状。
 // “酸胀”不在里面：练完有点酸，常常是正常的用力感觉。

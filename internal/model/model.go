@@ -19,6 +19,8 @@ type ModuleCard struct {
 	Frequency           string `json:"frequency"`
 	DueToday            bool   `json:"due_today"`
 	ClearedLevels       int    `json:"cleared_levels"`
+	TotalLevels         int    `json:"total_levels"`
+	Completed           bool   `json:"completed"`
 }
 
 // Action 是某一个等级上的一个动作。
@@ -36,6 +38,7 @@ type Action struct {
 	TargetSide        string `json:"target_side"`
 	Frequency         string `json:"frequency"`
 	Points            string `json:"points"`
+	ClassNote         string `json:"class_note"`
 	Contraindications string `json:"contraindications"`
 	VideoURL          string `json:"video_url"`
 	IsLocked          bool   `json:"is_locked"`

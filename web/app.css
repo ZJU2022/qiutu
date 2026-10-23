@@ -81,3 +81,51 @@ a { color: #0b57d0; }
 .small { color: #555; font-size: 13px; }
 
 .table-wrap { overflow-x: auto; }
+
+.points, .class-note { white-space: pre-wrap; margin-top: 6px; }
+.field-label { margin-top: 8px; color: #666; font-size: 12px; }
+.class-note { min-width: 180px; }
+
+.level-pick { display: flex; gap: 8px; align-items: center; margin: 6px 0 10px; }
+.level-pick select { width: auto; }
+
+.name-line { display: flex; gap: 8px; align-items: flex-start; justify-content: space-between; }
+.name-line button { flex: none; }
+.edit-fields label { margin-top: 6px; }
+
+.anatomy {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) minmax(220px, 280px);
+  gap: 12px;
+  align-items: start;
+}
+
+.figure {
+  width: 100%;
+  height: auto;
+  background: #faf7f2;
+  border: 1px solid #ccc;
+  font-family: "PingFang SC", "Noto Sans SC", sans-serif;
+}
+
+.skin { fill: #f6e7d8; stroke: #c4aa96; stroke-width: 1.1; stroke-linejoin: round; }
+.mark { fill: none; stroke: #c4aa96; stroke-width: 1.1; }
+
+.muscle { cursor: pointer; }
+.muscle path.part { fill: var(--c, #e7b2a6); stroke: #7a463c; stroke-width: 0.8; stroke-linejoin: round; }
+.muscle path.seam { fill: none; stroke: #8d5348; stroke-width: 0.7; }
+.muscle path.leader { fill: none; stroke: #6d564c; stroke-width: 0.7; }
+.muscle.on path.part { fill: #b13d32; }
+.muscle:hover path.part { fill: #c45a4c; }
+.muscle text {
+  font-size: 11px;
+  fill: #2a1a16;
+  dominant-baseline: middle;
+  pointer-events: none;
+}
+
+.muscle-card p { margin-top: 8px; }
+
+@media (max-width: 800px) {
+  .anatomy { grid-template-columns: 1fr; }
+}
